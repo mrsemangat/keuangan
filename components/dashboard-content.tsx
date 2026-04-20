@@ -219,7 +219,7 @@ export default function DashboardContent() {
                 ))}
               </Pie>
               <Tooltip
-                formatter={(v: number, name: string) => [v + ' siswa', name]}
+formatter={(v, name) => [Number(v) + ' siswa', name]}
                 contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
               />
             </PieChart>
