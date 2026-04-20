@@ -1,9 +1,8 @@
+import type { Student } from '@/lib/store'
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-import type { Student } from './store'
-
 export interface ImportedStudentRow {
-  // Personal
   nim: string
   name: string
   email: string
@@ -11,293 +10,269 @@ export interface ImportedStudentRow {
   address: string
   program: string
   academicYear: string
-  // Payment
   formFee: number
   formStatus: 'lunas' | 'belum_bayar'
   dpAmount: number
   dpStatus: 'lunas' | 'belum_bayar'
   tuitionTotal: number
   tuitionMethod: 'cash' | 'cicilan'
-  tuitionStatus: 'lunas' | 'belum_bayar' | 'cicilan' | 'telat'
+  tuitionStatus: 'lunas' | 'cicilan' | 'belum_bayar' | 'telat'
   installmentCount: number
-  // Validation
-  errors: string[]
 }
 
-// ─── CSV Utilities ─────────────────────────────────────────────────────────────
+export interface ParseResult {
+  valid: ImportedStudentRow[]
+  errors: { row: number; message: string }[]
+}
 
-/** Trigger a file download in the browser */
-function downloadBlob(content: string, filename: string, mime: string) {
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function triggerDownload(content: string, filename: string, mimeType: string) {
   const BOM = '\uFEFF'
-  const blob = new Blob([BOM + content], { type: mime + ';charset=utf-8;' })
+  const blob = new Blob([BOM + content], { type: mimeType })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
   a.download = filename
-  document.body.appendChild(a)
   a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
+  setTimeout(() => URL.revokeObjectURL(url), 5000)
 }
 
-/** Parse a CSV string into an array of rows (array of strings) */
-function parseCSV(text: string): string[][] {
-  // Strip BOM
-  const clean = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-  const rows: string[][] = []
-  const lines = clean.split('\n')
-
-  for (const line of lines) {
-    if (line.trim() === '') continue
-    const cells: string[] = []
-    let cur = ''
-    let inQuotes = false
-
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i]
-      if (ch === '"') {
-        if (inQuotes && line[i + 1] === '"') {
-          cur += '"'
-          i++
-        } else {
-          inQuotes = !inQuotes
-        }
-      } else if (ch === ',' && !inQuotes) {
-        cells.push(cur.trim())
-        cur = ''
-      } else {
-        cur += ch
-      }
-    }
-    cells.push(cur.trim())
-    rows.push(cells)
+function escapeCSV(value: string | number | undefined | null): string {
+  const s = String(value ?? '')
+  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+    return `"${s.replace(/"/g, '""')}"`
   }
-  return rows
+  return s
 }
 
-/** Normalize a header string to a plain lowercase key */
-function normalizeKey(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]/g, '')
+function formatRp(amount: number): string {
+  return `Rp ${amount.toLocaleString('id-ID')}`
 }
 
-/** Map every plausible CSV header variation → canonical field name */
-const HEADER_MAP: Record<string, string> = {
-  // NIM
+function formatDate(dateStr?: string): string {
+  if (!dateStr) return '-'
+  try {
+    return new Date(dateStr).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })
+  } catch {
+    return dateStr
+  }
+}
+
+// ─── CSV Parser ──────────────────────────────────────────────────────────────
+
+function parseCSVLine(line: string): string[] {
+  const result: string[] = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"'
+        i++
+      } else {
+        inQuotes = !inQuotes
+      }
+    } else if (ch === ',' && !inQuotes) {
+      result.push(current.trim())
+      current = ''
+    } else {
+      current += ch
+    }
+  }
+  result.push(current.trim())
+  return result
+}
+
+// Map header names (lowercase, no spaces/symbols) to field keys
+const HEADER_MAP: Record<string, keyof ImportedStudentRow> = {
   nim: 'nim',
-  nomorindukm: 'nim',
   nomorinduk: 'nim',
-  studentid: 'nim',
-  // Name
-  nama: 'name',
-  namaseswa: 'name',
   namalengkap: 'name',
-  name: 'name',
-  fullname: 'name',
-  // Email
+  nama: 'name',
+  namasiswa: 'name',
   email: 'email',
-  emailaddress: 'email',
-  // Phone
+  notelepon: 'phone',
   nohp: 'phone',
-  nomorhp: 'phone',
   telepon: 'phone',
-  phone: 'phone',
   hp: 'phone',
-  // Address
+  phone: 'phone',
   alamat: 'address',
   address: 'address',
-  // Program
-  program: 'program',
   programstudi: 'program',
-  jurusan: 'program',
   prodi: 'program',
-  // Academic Year
+  program: 'program',
+  jurusan: 'program',
   tahunajaran: 'academicYear',
-  tahunajar: 'academicYear',
+  tahun: 'academicYear',
   academicyear: 'academicYear',
-  ta: 'academicYear',
-  angkatan: 'academicYear',
-  // Form Fee
   biayaformulir: 'formFee',
-  biayaform: 'formFee',
-  formfee: 'formFee',
   formulir: 'formFee',
-  // Form Status
+  formfee: 'formFee',
   statusformulir: 'formStatus',
   statusform: 'formStatus',
   formstatus: 'formStatus',
-  statuspendaftaran: 'formStatus',
-  // DP Amount
   uangmukadp: 'dpAmount',
   uangmuka: 'dpAmount',
   dp: 'dpAmount',
   dpamount: 'dpAmount',
   uangdp: 'dpAmount',
-  downpayment: 'dpAmount',
-  // DP Status
-  statusuangmuka: 'dpStatus',
   statusdp: 'dpStatus',
+  statusuangmuka: 'dpStatus',
   dpstatus: 'dpStatus',
-  statuspembayarandp: 'dpStatus',
-  // Tuition Total
-  uangbelajar: 'tuitionTotal',
-  totalbiaya: 'tuitionTotal',
-  tuitiontotal: 'tuitionTotal',
-  totalpembayaran: 'tuitionTotal',
-  biayapendidikan: 'tuitionTotal',
   totaluangbelajar: 'tuitionTotal',
-  biaya: 'tuitionTotal',
-  // Tuition Method
+  uangbelajar: 'tuitionTotal',
+  tuitiontotal: 'tuitionTotal',
+  totalbiaya: 'tuitionTotal',
   metodepembayaran: 'tuitionMethod',
   metode: 'tuitionMethod',
   tuitionmethod: 'tuitionMethod',
-  carabayar: 'tuitionMethod',
-  // Tuition Status
   statuspembayaran: 'tuitionStatus',
   statusuangbelajar: 'tuitionStatus',
   tuitionstatus: 'tuitionStatus',
   statuspelunasan: 'tuitionStatus',
   status: 'tuitionStatus',
-  // Installment count
   jumlahcicilan: 'installmentCount',
   cicilan: 'installmentCount',
   installmentcount: 'installmentCount',
-  jumlahangsuran: 'installmentCount',
 }
 
-/** Normalize a status string to one of the known values */
-function normalizeStatus(raw: string): 'lunas' | 'belum_bayar' {
-  const v = raw.toLowerCase().replace(/[^a-z_]/g, '')
-  if (['lunas', 'paid', 'sudah', 'yes', 'y', 'selesai', 'terbayar'].includes(v)) return 'lunas'
+function normalizeHeader(h: string): string {
+  return h.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function normalizeStatus(val: string): 'lunas' | 'belum_bayar' {
+  const v = val.toLowerCase().trim()
+  if (['lunas', 'paid', 'sudah', 'ya', 'yes', '1', 'selesai'].includes(v)) return 'lunas'
   return 'belum_bayar'
 }
 
-function normalizeTuitionStatus(raw: string): 'lunas' | 'belum_bayar' | 'cicilan' | 'telat' {
-  const v = raw.toLowerCase().replace(/[^a-z_]/g, '')
-  if (['lunas', 'paid', 'sudah', 'terbayar', 'selesai'].includes(v)) return 'lunas'
-  if (['cicilan', 'installment', 'angsuran', 'dicicil'].includes(v)) return 'cicilan'
-  if (['telat', 'terlambat', 'overdue', 'late', 'keterlambatan'].includes(v)) return 'telat'
+function normalizeTuitionStatus(val: string): 'lunas' | 'cicilan' | 'belum_bayar' | 'telat' {
+  const v = val.toLowerCase().trim()
+  if (['lunas', 'paid', 'sudah', 'selesai', 'yes', '1'].includes(v)) return 'lunas'
+  if (['cicilan', 'installment', 'angsur', 'dicicil'].includes(v)) return 'cicilan'
+  if (['telat', 'terlambat', 'overdue', 'late'].includes(v)) return 'telat'
   return 'belum_bayar'
 }
 
-function normalizeTuitionMethod(raw: string): 'cash' | 'cicilan' {
-  const v = raw.toLowerCase().replace(/[^a-z]/g, '')
-  if (['cicilan', 'installment', 'kredit', 'angsur', 'dicicil'].includes(v)) return 'cicilan'
+function normalizeTuitionMethod(val: string): 'cash' | 'cicilan' {
+  const v = val.toLowerCase().trim()
+  if (['cicilan', 'installment', 'angsur', 'kredit'].includes(v)) return 'cicilan'
   return 'cash'
 }
 
-function parseNumber(raw: string): number {
-  // Strip currency symbols, dots as thousand separators, spaces
-  const cleaned = raw.replace(/[Rp.\s]/g, '').replace(/,/g, '')
-  const n = parseInt(cleaned, 10)
-  return isNaN(n) ? 0 : n
-}
+export async function parseImportFile(file: File): Promise<ParseResult> {
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        let text = e.target?.result as string
+        // Strip BOM
+        if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1)
+        // Normalize line endings
+        const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
 
-// ─── Parse Import File ─────────────────────────────────────────────────────────
+        // Find header row (skip empty lines and note rows starting with *)
+        let headerIdx = -1
+        for (let i = 0; i < lines.length; i++) {
+          const l = lines[i].trim()
+          if (!l || l.startsWith('*')) continue
+          headerIdx = i
+          break
+        }
 
-export async function parseImportFile(file: File): Promise<ImportedStudentRow[]> {
-  const text = await file.text()
-  const rawRows = parseCSV(text)
+        if (headerIdx === -1) {
+          return resolve({ valid: [], errors: [{ row: 0, message: 'File kosong atau tidak ada header.' }] })
+        }
 
-  if (rawRows.length < 2) {
-    throw new Error('File kosong atau tidak memiliki data.')
-  }
+        const headers = parseCSVLine(lines[headerIdx]).map(normalizeHeader)
+        const fieldMap: Record<number, keyof ImportedStudentRow> = {}
+        headers.forEach((h, i) => {
+          const key = HEADER_MAP[h]
+          if (key) fieldMap[i] = key
+        })
 
-  // Build header → column index map
-  const headers = rawRows[0]
-  const colMap: Record<string, number> = {}
-  headers.forEach((h, i) => {
-    const key = normalizeKey(h)
-    const field = HEADER_MAP[key]
-    if (field) colMap[field] = i
-  })
+        const valid: ImportedStudentRow[] = []
+        const errors: { row: number; message: string }[] = []
 
-  const get = (row: string[], field: string): string => {
-    const idx = colMap[field]
-    return idx !== undefined ? (row[idx] ?? '').trim() : ''
-  }
+        for (let i = headerIdx + 1; i < lines.length; i++) {
+          const line = lines[i].trim()
+          if (!line || line.startsWith('*')) continue
 
-  const results: ImportedStudentRow[] = []
+          const cols = parseCSVLine(lines[i])
+          const raw: Partial<Record<keyof ImportedStudentRow, string>> = {}
+          cols.forEach((val, ci) => {
+            const key = fieldMap[ci]
+            if (key) raw[key] = val.trim()
+          })
 
-  // Start from row 1 (skip header). Skip rows that look like instruction/notes rows.
-  for (let i = 1; i < rawRows.length; i++) {
-    const row = rawRows[i]
-    // Skip completely empty rows
-    if (row.every((c) => c === '')) continue
-    // Skip rows that look like template notes (start with * or #)
-    const firstCell = row[0] ?? ''
-    if (firstCell.startsWith('*') || firstCell.startsWith('#')) continue
+          const rowNum = i + 1
 
-    const errors: string[] = []
+          const nim  = raw.nim?.trim() || ''
+          const name = raw.name?.trim() || ''
 
-    const nim = get(row, 'nim')
-    const name = get(row, 'name')
-    const email = get(row, 'email')
-    const phone = get(row, 'phone')
-    const address = get(row, 'address')
-    const program = get(row, 'program')
-    const academicYear = get(row, 'academicYear')
-    const formFeeRaw = get(row, 'formFee')
-    const formStatusRaw = get(row, 'formStatus')
-    const dpAmountRaw = get(row, 'dpAmount')
-    const dpStatusRaw = get(row, 'dpStatus')
-    const tuitionTotalRaw = get(row, 'tuitionTotal')
-    const tuitionMethodRaw = get(row, 'tuitionMethod')
-    const tuitionStatusRaw = get(row, 'tuitionStatus')
-    const installmentCountRaw = get(row, 'installmentCount')
+          if (!nim)  { errors.push({ row: rowNum, message: `Baris ${rowNum}: NIM kosong.` }); continue }
+          if (!name) { errors.push({ row: rowNum, message: `Baris ${rowNum}: Nama kosong.` }); continue }
 
-    // Validation
-    if (!nim) errors.push(`Baris ${i + 1}: NIM kosong`)
-    if (!name) errors.push(`Baris ${i + 1}: Nama kosong`)
+          const formFee      = parseInt(raw.formFee?.replace(/\D/g, '') || '0') || 0
+          const dpAmount     = parseInt(raw.dpAmount?.replace(/\D/g, '') || '0') || 0
+          const tuitionTotal = parseInt(raw.tuitionTotal?.replace(/\D/g, '') || '0') || 0
+          const installmentCount = parseInt(raw.installmentCount || '0') || 0
+          const tuitionMethod  = normalizeTuitionMethod(raw.tuitionMethod || 'cash')
+          const tuitionStatusRaw = raw.tuitionStatus || ''
 
-    const formFee = parseNumber(formFeeRaw)
-    const formStatus = normalizeStatus(formStatusRaw)
-    const dpAmount = parseNumber(dpAmountRaw)
-    const dpStatus = dpAmountRaw ? normalizeStatus(dpStatusRaw) : 'belum_bayar'
-    const tuitionTotal = parseNumber(tuitionTotalRaw)
-    const tuitionMethod = normalizeTuitionMethod(tuitionMethodRaw)
+          // Auto-infer tuitionStatus if column is empty
+          let tuitionStatus: 'lunas' | 'cicilan' | 'belum_bayar' | 'telat'
+          if (!tuitionStatusRaw) {
+            if (tuitionMethod === 'cicilan') {
+              tuitionStatus = 'cicilan'
+            } else {
+              const dpS = normalizeStatus(raw.dpStatus || '')
+              tuitionStatus = dpS === 'lunas' ? 'lunas' : 'belum_bayar'
+            }
+          } else {
+            tuitionStatus = normalizeTuitionStatus(tuitionStatusRaw)
+          }
 
-    // Tuition status: use explicit value from CSV; if empty, infer from method
-    let tuitionStatus: 'lunas' | 'belum_bayar' | 'cicilan' | 'telat'
-    if (tuitionStatusRaw) {
-      tuitionStatus = normalizeTuitionStatus(tuitionStatusRaw)
-    } else {
-      // Auto-infer: if method is cicilan, status is cicilan; else belum_bayar
-      tuitionStatus = tuitionMethod === 'cicilan' ? 'cicilan' : 'belum_bayar'
+          valid.push({
+            nim,
+            name,
+            email:          raw.email?.trim() || '',
+            phone:          raw.phone?.trim() || '',
+            address:        raw.address?.trim() || '',
+            program:        raw.program?.trim() || '',
+            academicYear:   raw.academicYear?.trim() || '',
+            formFee,
+            formStatus:     normalizeStatus(raw.formStatus || ''),
+            dpAmount,
+            dpStatus:       normalizeStatus(raw.dpStatus || ''),
+            tuitionTotal,
+            tuitionMethod,
+            tuitionStatus,
+            installmentCount: tuitionMethod === 'cicilan' ? (installmentCount || 3) : 0,
+          })
+        }
+
+        resolve({ valid, errors })
+      } catch (err) {
+        resolve({ valid: [], errors: [{ row: 0, message: `Gagal membaca file: ${err}` }] })
+      }
     }
-
-    const installmentCount = installmentCountRaw ? (parseInt(installmentCountRaw, 10) || 1) : 1
-
-    results.push({
-      nim,
-      name,
-      email,
-      phone,
-      address,
-      program,
-      academicYear,
-      formFee,
-      formStatus,
-      dpAmount,
-      dpStatus,
-      tuitionTotal,
-      tuitionMethod,
-      tuitionStatus,
-      installmentCount,
-      errors,
-    })
-  }
-
-  return results
+    reader.onerror = () => resolve({ valid: [], errors: [{ row: 0, message: 'Gagal membaca file.' }] })
+    reader.readAsText(file, 'UTF-8')
+  })
 }
 
-// ─── Template Download ─────────────────────────────────────────────────────────
+// ─── Template Download ────────────────────────────────────────────────────────
 
-export async function downloadImportTemplate(): Promise<void> {
+export function downloadImportTemplate(): void {
   const headers = [
     'NIM',
-    'Nama',
+    'Nama Lengkap',
     'Email',
-    'No HP',
+    'No Telepon',
     'Alamat',
     'Program Studi',
     'Tahun Ajaran',
@@ -305,7 +280,7 @@ export async function downloadImportTemplate(): Promise<void> {
     'Status Formulir',
     'Uang Muka (DP)',
     'Status DP',
-    'Uang Belajar',
+    'Total Uang Belajar',
     'Metode Pembayaran',
     'Status Uang Belajar',
     'Jumlah Cicilan',
@@ -313,9 +288,9 @@ export async function downloadImportTemplate(): Promise<void> {
 
   const example = [
     '2024001',
-    'Budi Santoso',
-    'budi@email.com',
-    '081234567890',
+    'Ahmad Fauzi',
+    'ahmad@email.com',
+    '08123456789',
     'Jl. Merdeka No. 1',
     'Teknik Informatika',
     '2024/2025',
@@ -329,280 +304,306 @@ export async function downloadImportTemplate(): Promise<void> {
     '6',
   ]
 
-  const note = [
-    '* Kolom wajib: NIM dan Nama',
+  const notes = [
+    '* Keterangan:',
     '',
     '',
     '',
     '',
     '',
     '',
-    'Angka tanpa Rp/titik',
+    'Angka tanpa titik/koma',
     'lunas / belum_bayar',
-    '0 jika tidak ada',
+    'Angka tanpa titik/koma',
     'lunas / belum_bayar',
-    'Total biaya belajar',
+    'Angka tanpa titik/koma',
     'cash / cicilan',
-    'lunas / belum_bayar / cicilan / telat',
-    'Isi jika metode=cicilan',
+    'lunas / cicilan / belum_bayar / telat',
+    'Isi jika metode cicilan',
   ]
 
-  const escape = (v: string) => `"${v.replace(/"/g, '""')}"`
-  const lines = [
-    headers.map(escape).join(','),
-    example.map(escape).join(','),
-    note.map(escape).join(','),
-  ].join('\n')
+  const rows = [
+    headers.map(escapeCSV).join(','),
+    example.map(escapeCSV).join(','),
+    notes.map(escapeCSV).join(','),
+  ]
 
-  downloadBlob(lines, 'template-import-siswa.csv', 'text/csv')
+  triggerDownload(rows.join('\n'), 'template-import-siswa.csv', 'text/csv;charset=utf-8')
 }
 
-// ─── Export Students to CSV ────────────────────────────────────────────────────
+// ─── Export Students to CSV ──────────────────────────────────────────────────
 
-export async function exportStudentsToExcel(students: Student[]): Promise<void> {
+export function exportStudentsToExcel(students: Student[]): void {
   const headers = [
-    'NIM',
-    'Nama',
-    'Email',
-    'No HP',
-    'Alamat',
-    'Program Studi',
-    'Tahun Ajaran',
-    'Biaya Formulir',
-    'Status Formulir',
-    'Uang Muka (DP)',
-    'Status DP',
-    'Uang Belajar',
-    'Metode Pembayaran',
-    'Status Uang Belajar',
-    'Jumlah Cicilan',
-    'Total Dibayar',
-    'Sisa',
+    'NIM', 'Nama', 'Email', 'Telepon', 'Alamat', 'Program Studi', 'Tahun Ajaran',
+    'Biaya Formulir', 'Status Formulir', 'Tgl Bayar Formulir',
+    'Uang Muka (DP)', 'Status DP', 'Tgl Bayar DP',
+    'Total Uang Belajar', 'Metode', 'Status Uang Belajar',
+    'Total Dibayar', 'Sisa',
   ]
 
-  const escape = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`
-
   const rows = students.map((s) => {
-    const p = s.payment
-    const paid = (p.formStatus === 'lunas' ? p.formFee : 0) +
-      (p.dpStatus === 'lunas' ? p.dpAmount : 0) +
-      p.installments.filter((i) => i.status === 'paid').reduce((a, i) => a + i.amount, 0) +
-      (p.tuitionMethod === 'cash' && p.tuitionStatus === 'lunas' ? p.tuitionTotal : 0)
-    const sisa = p.tuitionTotal + p.formFee - paid
-
+    const paid = getPaidTotal(s)
+    const remaining = s.payment.tuitionTotal - paid
     return [
       s.nim,
       s.name,
       s.email || '',
       s.phone || '',
       s.address || '',
-      s.program,
+      s.program || '',
       s.academicYear || '',
-      p.formFee,
-      p.formStatus,
-      p.dpAmount,
-      p.dpStatus,
-      p.tuitionTotal,
-      p.tuitionMethod,
-      p.tuitionStatus,
-      p.installments.length,
+      s.payment.formFee,
+      s.payment.formStatus === 'lunas' ? 'Lunas' : 'Belum Bayar',
+      s.payment.formPaidDate || '',
+      s.payment.dpAmount,
+      s.payment.dpStatus === 'lunas' ? 'Lunas' : 'Belum Bayar',
+      s.payment.dpPaidDate || '',
+      s.payment.tuitionTotal,
+      s.payment.tuitionMethod === 'cicilan' ? 'Cicilan' : 'Cash',
+      statusLabel(s.payment.tuitionStatus),
       paid,
-      Math.max(0, sisa),
-    ].map(escape).join(',')
+      remaining,
+    ].map(escapeCSV).join(',')
   })
 
-  const csv = [headers.map(escape).join(','), ...rows].join('\n')
-  const date = new Date().toISOString().slice(0, 10)
-  downloadBlob(csv, `data-siswa-${date}.csv`, 'text/csv')
+  const content = [headers.map(escapeCSV).join(','), ...rows].join('\n')
+  triggerDownload(content, `data-siswa-${today()}.csv`, 'text/csv;charset=utf-8')
 }
 
-// ─── Export Laporan to CSV ─────────────────────────────────────────────────────
+// ─── Export Students to PDF ──────────────────────────────────────────────────
 
-interface MonthlyData {
-  month: string
-  income: number
-  target: number
-  count: number
-}
-
-export async function exportLaporanToExcel(students: Student[], monthly: MonthlyData[]): Promise<void> {
-  const escape = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`
-
-  // Sheet 1: student summary
-  const headers1 = ['NIM', 'Nama', 'Program', 'TA', 'Total Biaya', 'Dibayar', 'Sisa', 'Status']
-  const rows1 = students.map((s) => {
-    const p = s.payment
-    const paid = (p.formStatus === 'lunas' ? p.formFee : 0) +
-      (p.dpStatus === 'lunas' ? p.dpAmount : 0) +
-      p.installments.filter((i) => i.status === 'paid').reduce((a, i) => a + i.amount, 0) +
-      (p.tuitionMethod === 'cash' && p.tuitionStatus === 'lunas' ? p.tuitionTotal : 0)
-    const sisa = Math.max(0, p.tuitionTotal + p.formFee - paid)
-    return [s.nim, s.name, s.program, s.academicYear || '', p.tuitionTotal + p.formFee, paid, sisa, p.tuitionStatus].map(escape).join(',')
-  })
-
-  // Sheet 2: monthly (appended after blank separator)
-  const headers2 = ['Bulan', 'Pemasukan', 'Target', 'Jumlah Transaksi']
-  const rows2 = monthly.map((m) => [m.month, m.income, m.target, m.count].map(escape).join(','))
-
-  const csv = [
-    '=== RINGKASAN SISWA ===',
-    headers1.map(escape).join(','),
-    ...rows1,
-    '',
-    '=== PEMASUKAN BULANAN ===',
-    headers2.map(escape).join(','),
-    ...rows2,
-  ].join('\n')
-
-  const date = new Date().toISOString().slice(0, 10)
-  downloadBlob(csv, `laporan-${date}.csv`, 'text/csv')
-}
-
-// ─── Export PDF (via print iframe) ────────────────────────────────────────────
-
-function formatRp(n: number) {
-  return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(n)
-}
-
-const STATUS_LABEL: Record<string, string> = {
-  lunas: 'Lunas',
-  belum_bayar: 'Belum Bayar',
-  cicilan: 'Cicilan',
-  telat: 'Telat',
-}
-
-const STATUS_COLOR: Record<string, string> = {
-  lunas: '#16a34a',
-  belum_bayar: '#dc2626',
-  cicilan: '#2563eb',
-  telat: '#d97706',
-}
-
-export async function exportStudentsToPDF(students: Student[], appName: string): Promise<void> {
-  const date = new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' })
-
-  const rows = students.map((s) => {
-    const p = s.payment
-    const paid = (p.formStatus === 'lunas' ? p.formFee : 0) +
-      (p.dpStatus === 'lunas' ? p.dpAmount : 0) +
-      p.installments.filter((i) => i.status === 'paid').reduce((a, i) => a + i.amount, 0) +
-      (p.tuitionMethod === 'cash' && p.tuitionStatus === 'lunas' ? p.tuitionTotal : 0)
-    const sisa = Math.max(0, p.tuitionTotal + p.formFee - paid)
-    const color = STATUS_COLOR[p.tuitionStatus] ?? '#6b7280'
-    const label = STATUS_LABEL[p.tuitionStatus] ?? p.tuitionStatus
-
-    return `<tr>
-      <td>${s.nim}</td>
-      <td>${s.name}</td>
-      <td>${s.program}</td>
-      <td>${s.academicYear || '-'}</td>
-      <td style="text-align:right">${formatRp(p.tuitionTotal + p.formFee)}</td>
-      <td style="text-align:right">${formatRp(paid)}</td>
-      <td style="text-align:right">${formatRp(sisa)}</td>
-      <td><span style="color:${color};font-weight:600">${label}</span></td>
-    </tr>`
+export function exportStudentsToPDF(students: Student[], appName = 'Hitungin'): void {
+  const rows = students.map((s, i) => {
+    const paid = getPaidTotal(s)
+    return `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${s.nim}</td>
+        <td>${s.name}</td>
+        <td>${s.program || '-'}</td>
+        <td>${s.academicYear || '-'}</td>
+        <td style="text-align:right">${formatRp(s.payment.tuitionTotal)}</td>
+        <td style="text-align:right">${formatRp(paid)}</td>
+        <td style="text-align:right">${formatRp(s.payment.tuitionTotal - paid)}</td>
+        <td><span class="badge badge-${s.payment.tuitionStatus}">${statusLabel(s.payment.tuitionStatus)}</span></td>
+      </tr>`
   }).join('')
 
-  const html = `<!DOCTYPE html>
-<html lang="id">
-<head>
-<meta charset="UTF-8"/>
-<title>Data Siswa - ${appName}</title>
-<style>
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body { font-family: Arial, sans-serif; font-size: 11px; color: #111; padding: 24px; }
-  h1 { font-size: 16px; font-weight: 700; margin-bottom: 2px; }
-  .sub { color: #6b7280; font-size: 10px; margin-bottom: 16px; }
-  table { width: 100%; border-collapse: collapse; }
-  th { background: #1e3a5f; color: #fff; padding: 7px 10px; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
-  td { padding: 6px 10px; border-bottom: 1px solid #e5e7eb; }
-  tr:nth-child(even) td { background: #f9fafb; }
-  @media print { body { padding: 0; } }
-</style>
-</head>
-<body>
-  <h1>${appName} — Data Siswa</h1>
-  <p class="sub">Dicetak pada ${date} &bull; Total ${students.length} siswa</p>
-  <table>
-    <thead>
+  const html = buildPDFHtml({
+    appName,
+    title: 'Data Siswa',
+    subtitle: `Total: ${students.length} siswa — Dicetak: ${formatDate(new Date().toISOString())}`,
+    tableHead: `<tr>
+      <th>No</th><th>NIM</th><th>Nama</th><th>Program</th><th>TA</th>
+      <th>Total Biaya</th><th>Dibayar</th><th>Sisa</th><th>Status</th>
+    </tr>`,
+    tableBody: rows,
+  })
+
+  printHTML(html)
+}
+
+// ─── Export Laporan to CSV ────────────────────────────────────────────────────
+
+export function exportLaporanToExcel(students: Student[], monthlyData: { name: string; income: number }[]): void {
+  // Sheet 1: summary
+  const summaryHeaders = ['NIM', 'Nama', 'Program', 'TA', 'Total Biaya', 'Dibayar', 'Sisa', 'Status']
+  const summaryRows = students.map((s) => {
+    const paid = getPaidTotal(s)
+    return [
+      s.nim, s.name, s.program || '', s.academicYear || '',
+      s.payment.tuitionTotal, paid, s.payment.tuitionTotal - paid,
+      statusLabel(s.payment.tuitionStatus),
+    ].map(escapeCSV).join(',')
+  })
+
+  // Sheet 2: monthly (appended after blank line)
+  const monthlyHeaders = ['Bulan', 'Pemasukan (Rp)']
+  const monthlyRows = monthlyData.map((m) => [m.name, m.income].map(escapeCSV).join(','))
+
+  const content = [
+    '=== RINGKASAN SISWA ===',
+    summaryHeaders.map(escapeCSV).join(','),
+    ...summaryRows,
+    '',
+    '=== PEMASUKAN BULANAN ===',
+    monthlyHeaders.map(escapeCSV).join(','),
+    ...monthlyRows,
+  ].join('\n')
+
+  triggerDownload(content, `laporan-keuangan-${today()}.csv`, 'text/csv;charset=utf-8')
+}
+
+// ─── Export Laporan to PDF ────────────────────────────────────────────────────
+
+export function exportLaporanToPDF(
+  students: Student[],
+  monthlyData: { name: string; income: number }[],
+  appName = 'Hitungin'
+): void {
+  const totalIncome = students.reduce((sum, s) => sum + getPaidTotal(s), 0)
+  const totalPending = students.reduce((sum, s) => sum + (s.payment.tuitionTotal - getPaidTotal(s)), 0)
+  const lunas = students.filter((s) => s.payment.tuitionStatus === 'lunas').length
+  const belum = students.filter((s) => s.payment.tuitionStatus === 'belum_bayar').length
+  const cicilan = students.filter((s) => s.payment.tuitionStatus === 'cicilan').length
+
+  const summaryCards = `
+    <div class="cards">
+      <div class="card"><div class="card-label">Total Siswa</div><div class="card-value">${students.length}</div></div>
+      <div class="card"><div class="card-label">Sudah Lunas</div><div class="card-value green">${lunas}</div></div>
+      <div class="card"><div class="card-label">Cicilan</div><div class="card-value blue">${cicilan}</div></div>
+      <div class="card"><div class="card-label">Belum Bayar</div><div class="card-value red">${belum}</div></div>
+      <div class="card"><div class="card-label">Total Pemasukan</div><div class="card-value">${formatRp(totalIncome)}</div></div>
+      <div class="card"><div class="card-label">Sisa Piutang</div><div class="card-value red">${formatRp(totalPending)}</div></div>
+    </div>`
+
+  const monthlyRows = monthlyData.map((m, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td>${m.name}</td>
+      <td style="text-align:right">${formatRp(m.income)}</td>
+    </tr>`).join('')
+
+  const studentRows = students.map((s, i) => {
+    const paid = getPaidTotal(s)
+    return `
       <tr>
-        <th>NIM</th><th>Nama</th><th>Program</th><th>TA</th>
-        <th>Total Biaya</th><th>Dibayar</th><th>Sisa</th><th>Status</th>
-      </tr>
-    </thead>
-    <tbody>${rows}</tbody>
-  </table>
-</body>
-</html>`
+        <td>${i + 1}</td>
+        <td>${s.nim}</td>
+        <td>${s.name}</td>
+        <td>${s.program || '-'}</td>
+        <td style="text-align:right">${formatRp(s.payment.tuitionTotal)}</td>
+        <td style="text-align:right">${formatRp(paid)}</td>
+        <td style="text-align:right">${formatRp(s.payment.tuitionTotal - paid)}</td>
+        <td><span class="badge badge-${s.payment.tuitionStatus}">${statusLabel(s.payment.tuitionStatus)}</span></td>
+      </tr>`
+  }).join('')
+
+  const body = `
+    ${summaryCards}
+    <h3 style="margin:24px 0 8px">Pemasukan Bulanan</h3>
+    <table>
+      <thead><tr><th>No</th><th>Bulan</th><th>Pemasukan</th></tr></thead>
+      <tbody>${monthlyRows}</tbody>
+    </table>
+    <h3 style="margin:24px 0 8px">Detail Siswa</h3>
+    <table>
+      <thead><tr><th>No</th><th>NIM</th><th>Nama</th><th>Program</th><th>Total</th><th>Dibayar</th><th>Sisa</th><th>Status</th></tr></thead>
+      <tbody>${studentRows}</tbody>
+    </table>`
+
+  const html = buildPDFHtml({
+    appName,
+    title: 'Laporan Keuangan',
+    subtitle: `Dicetak: ${formatDate(new Date().toISOString())}`,
+    tableHead: '',
+    tableBody: '',
+    customBody: body,
+  })
 
   printHTML(html)
 }
 
-export async function exportLaporanToPDF(students: Student[], monthly: MonthlyData[], appName: string): Promise<void> {
-  const date = new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' })
-  const totalIncome = monthly.reduce((a, m) => a + m.income, 0)
+// ─── PDF Builder ─────────────────────────────────────────────────────────────
 
-  const monthRows = monthly.map((m) => `<tr>
-    <td>${m.month}</td>
-    <td style="text-align:right">${formatRp(m.income)}</td>
-    <td style="text-align:right">${formatRp(m.target)}</td>
-    <td style="text-align:right">${m.count}</td>
-  </tr>`).join('')
+function buildPDFHtml(opts: {
+  appName: string
+  title: string
+  subtitle: string
+  tableHead: string
+  tableBody: string
+  customBody?: string
+}): string {
+  const table = opts.customBody
+    ? opts.customBody
+    : `<table><thead>${opts.tableHead}</thead><tbody>${opts.tableBody}</tbody></table>`
 
-  const html = `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html lang="id">
 <head>
-<meta charset="UTF-8"/>
-<title>Laporan - ${appName}</title>
+<meta charset="UTF-8">
+<title>${opts.title} — ${opts.appName}</title>
 <style>
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body { font-family: Arial, sans-serif; font-size: 11px; color: #111; padding: 24px; }
-  h1 { font-size: 16px; font-weight: 700; margin-bottom: 2px; }
-  h2 { font-size: 13px; font-weight: 700; margin: 20px 0 8px; }
-  .sub { color: #6b7280; font-size: 10px; margin-bottom: 16px; }
-  .stat { display: inline-block; margin-right: 24px; }
-  .stat strong { font-size: 15px; display: block; }
-  table { width: 100%; border-collapse: collapse; }
-  th { background: #1e3a5f; color: #fff; padding: 7px 10px; text-align: left; font-size: 10px; text-transform: uppercase; }
-  td { padding: 6px 10px; border-bottom: 1px solid #e5e7eb; }
-  tr:nth-child(even) td { background: #f9fafb; }
-  @media print { body { padding: 0; } }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, sans-serif; font-size: 11px; color: #111; padding: 20px; }
+  .header { background: #1e40af; color: white; padding: 14px 20px; border-radius: 8px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; }
+  .header h1 { font-size: 18px; font-weight: 700; }
+  .header p  { font-size: 10px; opacity: 0.85; margin-top: 2px; }
+  .header .right { text-align: right; font-size: 10px; opacity: 0.85; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+  th { background: #1e40af; color: white; padding: 6px 8px; text-align: left; font-size: 10px; }
+  td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; font-size: 10px; }
+  tr:nth-child(even) td { background: #f8fafc; }
+  .badge { padding: 2px 7px; border-radius: 12px; font-size: 9px; font-weight: 600; }
+  .badge-lunas    { background: #d1fae5; color: #065f46; }
+  .badge-cicilan  { background: #dbeafe; color: #1e40af; }
+  .badge-belum_bayar { background: #fee2e2; color: #991b1b; }
+  .badge-telat    { background: #fef3c7; color: #92400e; }
+  .cards { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+  .card { flex: 1; min-width: 130px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; }
+  .card-label { font-size: 9px; color: #6b7280; margin-bottom: 4px; }
+  .card-value { font-size: 16px; font-weight: 700; color: #111; }
+  .card-value.green { color: #059669; }
+  .card-value.blue  { color: #2563eb; }
+  .card-value.red   { color: #dc2626; }
+  @media print {
+    body { padding: 0; }
+    @page { margin: 15mm; size: A4 landscape; }
+  }
 </style>
 </head>
 <body>
-  <h1>${appName} — Laporan Keuangan</h1>
-  <p class="sub">Dicetak pada ${date}</p>
-  <div style="margin-bottom:16px">
-    <span class="stat"><strong>${students.length}</strong>Total Siswa</span>
-    <span class="stat"><strong>${formatRp(totalIncome)}</strong>Total Pemasukan</span>
-  </div>
-  <h2>Pemasukan Bulanan</h2>
-  <table>
-    <thead><tr><th>Bulan</th><th>Pemasukan</th><th>Target</th><th>Transaksi</th></tr></thead>
-    <tbody>${monthRows}</tbody>
-  </table>
+<div class="header">
+  <div><h1>${opts.appName}</h1><p>${opts.title}</p></div>
+  <div class="right">${opts.subtitle}</div>
+</div>
+${table}
 </body>
 </html>`
-
-  printHTML(html)
 }
 
-function printHTML(html: string) {
+function printHTML(html: string): void {
   const iframe = document.createElement('iframe')
-  iframe.style.position = 'fixed'
-  iframe.style.left = '-9999px'
-  iframe.style.top = '-9999px'
-  iframe.style.width = '1px'
-  iframe.style.height = '1px'
+  iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none;'
   document.body.appendChild(iframe)
-  const doc = iframe.contentWindow?.document
-  if (!doc) { document.body.removeChild(iframe); return }
+  const doc = iframe.contentDocument || iframe.contentWindow?.document
+  if (!doc) return
   doc.open()
   doc.write(html)
   doc.close()
   iframe.contentWindow?.focus()
   setTimeout(() => {
     iframe.contentWindow?.print()
-    setTimeout(() => document.body.removeChild(iframe), 1000)
+    setTimeout(() => document.body.removeChild(iframe), 2000)
   }, 500)
+}
+
+// ─── Internal Helpers ─────────────────────────────────────────────────────────
+
+function getPaidTotal(s: Student): number {
+  const form = s.payment.formStatus === 'lunas' ? s.payment.formFee : 0
+  const dp   = s.payment.dpStatus   === 'lunas' ? s.payment.dpAmount : 0
+  const installmentsPaid = (s.payment.installments ?? [])
+    .filter((i) => i.status === 'lunas')
+    .reduce((sum, i) => sum + i.amount, 0)
+  if (s.payment.tuitionMethod === 'cash') {
+    const tuition = s.payment.tuitionStatus === 'lunas' ? s.payment.tuitionTotal : 0
+    return form + tuition
+  }
+  return form + dp + installmentsPaid
+}
+
+function statusLabel(status: string): string {
+  switch (status) {
+    case 'lunas':      return 'Lunas'
+    case 'cicilan':    return 'Cicilan'
+    case 'telat':      return 'Telat'
+    case 'belum_bayar': return 'Belum Bayar'
+    default:           return status
+  }
+}
+
+function today(): string {
+  return new Date().toISOString().split('T')[0]
 }
