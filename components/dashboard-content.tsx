@@ -194,7 +194,11 @@ export default function DashboardContent() {
               <XAxis dataKey="month" tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} axisLine={false} tickLine={false} tickFormatter={(v) => `${(v / 1000000).toFixed(1)}jt`} />
               <Tooltip
-                formatter={(value, name) => [formatCurrency(Number(value)), name === 'pemasukan' ? 'Uang Belajar' : 'Formulir']}
+                formatter={(value) => {
+const numValue = typeof value === 'number' ? value : Number(value) || 0;
+return [formatCurrency(numValue), 'value'];
+}}
+
                 contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
               />
               <Legend formatter={(v) => v === 'pemasukan' ? 'Uang Belajar' : 'Formulir'} wrapperStyle={{ fontSize: 11 }} />
