@@ -184,7 +184,8 @@ function ImportModal({
     try {
       const { parseImportFile } = await import('@/lib/excel-utils')
       const parsed = await parseImportFile(file)
-      const allErrors = parsed.flatMap((r) => r.errors)
+      // YANG BENAR:
+const allErrors = parsed.flat ? parsed.flat() : parsed
       setRows(parsed)
       setErrors(allErrors)
       setStep('preview')
